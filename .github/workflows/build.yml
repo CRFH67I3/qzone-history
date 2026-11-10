@@ -1,0 +1,121 @@
+name: build
+
+# 纯云端交叉编译：不需要本地 Go 环境，产物同时上传到 Actions Artifacts 和 Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach assets to (will be created if missing)"
+        required: false
+        default: "ci-latest"
+      prerelease:
+        description: "Mark release as prerelease"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go (from go.mod)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          GOFLAGS: "-mod=mod"
+        run: |
+          set -eux
+          go version
+          VER="$(git describe --tags --always 2>/dev/null || echo v0.0.1)"
+          BIN="qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
+          mkdir -p out dist
+          go build -trimpath -ldflags "-s -w -X qzone-history/version.Version=${VER}" -o "out/${BIN}" ./cmd/main.go
+          mkdir -p "pkg/config"
+          cp config/config.yaml pkg/config/config.yaml
+          cp README.md pkg/ 2>/dev/null || true
+          cd pkg
+          zip -r "../dist/qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}.zip" .
+          cd ..
+          ls -l out dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qzone-history-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Upload binary (raw, for quick download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: publish release assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qzone-history-*
+          merge-multiple: true
+          path: assets
+
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || 'ci-latest' }}
+          PRE: ${{ inputs.prerelease }}
+        run: |
+          set -eux
+          ls -l assets
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/*.zip --clobber
+          else
+            ARGS=""
+            if [ "$PRE" = "true" ]; then ARGS="--prerelease"; fi
+            gh release create "$TAG" assets/*.zip \
+              --target "${GITHUB_SHA}" \
+              --title "qzone-history $TAG" \
+              --notes "Automated build from ${GITHUB_SHA} (run #${GITHUB_RUN_NUMBER})" \
+              ${ARGS}
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "### 构建完成 🎉"
+            echo ""
+            echo "下载地址：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${{ inputs.tag || 'ci-latest' }}"
+            echo ""
+            echo "| platform | asset |"
+            echo "| --- | --- |"
+            for f in assets/*.zip; do
+              echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
