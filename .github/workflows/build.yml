@@ -47,7 +47,7 @@ jobs:
           VER="$(git describe --tags --always 2>/dev/null || echo v0.0.1)"
           BIN="qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}"
           if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
-                    mkdir -p out dist stage/config
+          mkdir -p out dist stage/config
           go build -trimpath -ldflags "-s -w -X qzone-history/version.Version=${VER}" -o "out/${BIN}" ./cmd/main.go
           cp "out/${BIN}" stage/
           cp config/config.yaml stage/config/
