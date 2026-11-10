@@ -73,7 +73,7 @@ jobs:
 
   release:
     name: publish release assets
-    needs: build
+    needs: [build, termux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -119,3 +119,70 @@ jobs:
               echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  termux:
+    name: termux ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, goarch: arm64, goarm: "", cc: aarch64-linux-android21-clang }
+          - { arch: arm, goarch: arm, goarm: "7", cc: armv7a-linux-androideabi21-clang }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build (GOOS=android + NDK clang)
+        env:
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "1"
+          GOFLAGS: "-mod=mod"
+          NDKCC: ${{ matrix.cc }}
+        run: |
+          set -eux
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            NDK="$(ls -d /usr/local/lib/android/sdk/ndk/* | sort -V | tail -1)"
+          fi
+          export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKCC}"
+          test -x "$CC"
+          VER="$(git describe --tags --always 2>/dev/null || echo v0.0.1)"
+          mkdir -p out dist stage-t/config
+          go build -trimpath -ldflags "-s -w -X qzone-history/version.Version=${VER}" -o out/qzone-history ./cmd/main.go
+          file out/qzone-history
+      - name: Package
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eux
+          cp out/qzone-history stage-t/
+          cp config/config.yaml stage-t/config/
+          cat > stage-t/install.sh <<'EOF'
+          #!/data/data/com.termux/files/usr/bin/sh
+          set -eu
+          cd "$(dirname "$0")"
+          P="${PREFIX:-/data/data/com.termux/files/usr}"
+          cp qzone-history "$P/bin/qzone-history"
+          chmod 700 "$P/bin/qzone-history"
+          if [ ! -e "$P/bin/xdg-open" ]; then
+            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/sh' 'exec termux-open "$@" >/dev/null 2>&1' > "$P/bin/xdg-open"
+            chmod 700 "$P/bin/xdg-open"
+          fi
+          mkdir -p "$HOME/qzone-history/config"
+          [ -f "$HOME/qzone-history/config/config.yaml" ] || cp config/config.yaml "$HOME/qzone-history/config/"
+          echo "installed: $P/bin/qzone-history"
+          echo "run: cd ~/qzone-history && qzone-history"
+          EOF
+          chmod +x stage-t/install.sh stage-t/qzone-history
+          ( cd stage-t && zip -r "../dist/qzone-history_termux_${ARCH}.zip" . )
+          unzip -l "dist/qzone-history_termux_${ARCH}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qzone-history-termux-${{ matrix.arch }}
+          path: dist/*.zip
+          if-no-files-found: error
