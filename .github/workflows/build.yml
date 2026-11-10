@@ -47,15 +47,15 @@ jobs:
           VER="$(git describe --tags --always 2>/dev/null || echo v0.0.1)"
           BIN="qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}"
           if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
-          mkdir -p out dist
+                    mkdir -p out dist stage/config
           go build -trimpath -ldflags "-s -w -X qzone-history/version.Version=${VER}" -o "out/${BIN}" ./cmd/main.go
-          mkdir -p "pkg/config"
-          cp config/config.yaml pkg/config/config.yaml
-          cp README.md pkg/ 2>/dev/null || true
-          cd pkg
-          zip -r "../dist/qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}.zip" .
-          cd ..
+          cp "out/${BIN}" stage/
+          cp config/config.yaml stage/config/
+          cp README.md stage/ 2>/dev/null || true
+          test -x "stage/${BIN}"
+          ( cd stage && zip -r "../dist/qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}.zip" . )
           ls -l out dist
+          unzip -l "dist/qzone-history_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
