@@ -20,6 +20,10 @@ type Config struct {
 		LoginURL   string
 		MessageURL string
 	}
+	Output struct {
+		Dir     string // 导出目录（JSON / CSV / HTML），默认当前目录
+		Verbose bool   // 打印每页抓取详情
+	}
 }
 
 func LoadConfig() (*Config, error) {
@@ -39,7 +43,7 @@ func LoadConfig() (*Config, error) {
 			Port:     5432,
 			User:     "your_db_user",
 			Password: "your_db_password",
-			DBName:   "./qzone-history.db",
+			DBName:   "./app.db", // 与原项目产物保持一致（旧版为 ./qzone-history.db）
 			SSLMode:  "disable",
 		},
 		QzoneAPI: struct {
@@ -52,6 +56,9 @@ func LoadConfig() (*Config, error) {
 			MessageURL: "https://user.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds2_html_pav_all",
 		},
 	}
+
+	defaultConfig.Output.Dir = "."
+	defaultConfig.Output.Verbose = false
 
 	// 尝试读取外部配置文件
 	viper.SetConfigName("config")

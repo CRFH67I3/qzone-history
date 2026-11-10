@@ -21,7 +21,7 @@ type BoardMessage struct {
 func (message *BoardMessage) BeforeCreate(tx *gorm.DB) (err error) {
 	if message.ID == "" {
 		// 使用内容和收到的人的QQ生成唯一键
-		key := message.Content + message.UserQQ + message.SenderQQ
+		key := message.SenderQQ + "|" + message.Content + "|" + message.TimeText + "|" + message.UserQQ
 		hash := md5.Sum([]byte(key))
 		message.ID = hex.EncodeToString(hash[:])
 	}

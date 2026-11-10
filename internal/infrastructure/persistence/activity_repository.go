@@ -35,3 +35,8 @@ func (r *activityRepository) FindByType(ctx context.Context, activityType entity
 	err := r.db.DB().WithContext(ctx).Where("type = ?", activityType).Limit(limit).Offset(offset).Find(&activities).Error
 	return activities, err
 }
+
+// PurgeByUserQQ 清掉该用户的全部互动消息
+func (r *activityRepository) PurgeByUserQQ(ctx context.Context, userQQ string) error {
+	return r.db.DB().WithContext(ctx).Where("receiver_qq = ?", userQQ).Delete(&entity.Activity{}).Error
+}

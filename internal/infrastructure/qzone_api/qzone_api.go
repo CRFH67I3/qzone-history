@@ -132,10 +132,13 @@ func (c *qzoneAPIClient) CompleteLogin(responseText string) (map[string]string, 
 		return nil, fmt.Errorf("创建 check_sig 请求失败: %w", err)
 	}
 
-	c.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
+	noRedirect := &http.Client{
+		Timeout: c.httpClient.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := noRedirect.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("发送 check_sig 请求失败: %w", err)
 	}
@@ -148,7 +151,6 @@ func (c *qzoneAPIClient) CompleteLogin(responseText string) (map[string]string, 
 		}
 	}
 
-	c.httpClient.CheckRedirect = nil
 	return cookies, nil
 }
 
@@ -292,8 +294,8 @@ func (c *qzoneAPIClient) GetActivities(cookies map[string]string, offset, count 
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	// 处理响应 HTML
-	processedHTML := utils.ProcessOldHTML(string(body))
+	// QQ 空间接口在非 UTF-8 声明时返回 GBK，先统一转成 UTF-8
+	processedHTML := decodeBody(body, resp.Header.Get("Content-Type"))
 	if !strings.Contains(processedHTML, "li") {
 		// 如果没有活动返回空
 		return nil, nil

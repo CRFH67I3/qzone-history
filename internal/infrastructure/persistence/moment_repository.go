@@ -2,10 +2,13 @@ package persistence
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"gorm.io/gorm"
 	"qzone-history/internal/domain/entity"
 	"qzone-history/internal/domain/repository"
 	"qzone-history/pkg/database"
+	"strings"
 )
 
 type momentRepository struct {
@@ -61,4 +64,76 @@ func (r *momentRepository) FindByID(ctx context.Context, momentID string) (*enti
 		return nil, err
 	}
 	return &moment, nil
+}
+
+// SaveMoment 写入说说及其评论（评论按说说整体替换，避免重复累积）
+func (r *momentRepository) SaveMoment(ctx context.Context, moment entity.Moment) error {
+	db := r.db.DB().WithContext(ctx)
+	existing, err := r.FindByID(ctx, moment.ID)
+	if err == nil && existing != nil {
+		// 保留已有的统计信息
+		moment.Likes = maxInt(moment.Likes, existing.Likes)
+		moment.Views = maxInt(moment.Views, existing.Views)
+		if moment.Content == "" {
+			moment.Content = existing.Content
+		}
+		if moment.Timestamp.IsZero() {
+			moment.Timestamp = existing.Timestamp
+			moment.TimeText = existing.TimeText
+		}
+		if len(moment.ImageURLs) == 0 {
+			moment.ImageURLs = existing.ImageURLs
+		}
+	}
+	if strings.HasPrefix(moment.ID, "rec_") {
+		moment.IsReconstructed = true
+		moment.Source = "activity"
+	} else if moment.Source == "" {
+		moment.Source = "qzone"
+	}
+	comments := moment.Comments
+	moment.Comments = nil
+	if err := db.Save(&moment).Error; err != nil {
+		return err
+	}
+	if err := db.Where("moment_id = ?", moment.ID).Delete(&entity.Comment{}).Error; err != nil {
+		return err
+	}
+	for i := range comments {
+		c := comments[i]
+		c.MomentID = moment.ID
+		if c.ID == "" {
+			h := md5.Sum([]byte(moment.ID + c.Content + c.TimeText))
+			c.ID = hex.EncodeToString(h[:])
+		}
+		if c.UserQQ == "" {
+			c.UserQQ = moment.UserQQ
+		}
+		if err := db.Save(&c).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PurgeByUserQQ 清掉该用户全部说说与评论
+func (r *momentRepository) PurgeByUserQQ(ctx context.Context, userQQ string) error {
+	db := r.db.DB().WithContext(ctx)
+	ids := make([]string, 0)
+	if err := db.Model(&entity.Moment{}).Where("user_qq = ?", userQQ).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		if err := db.Where("moment_id IN ?", ids).Delete(&entity.Comment{}).Error; err != nil {
+			return err
+		}
+	}
+	return db.Where("user_qq = ?", userQQ).Delete(&entity.Moment{}).Error
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

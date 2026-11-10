@@ -76,9 +76,9 @@ func (u *reconstructionUseCase) ReconstructMomentsFromActivities(ctx context.Con
 
 func generateMomentKey(activity entity.Activity) string {
 	// 使用内容和收到的人的QQ生成唯一键
-	key := activity.Content + activity.ReceiverQQ
+	key := activity.SenderQQ + "|" + activity.Content + "|" + activity.TimeText + "|" + activity.ReceiverQQ
 	hash := md5.Sum([]byte(key))
-	return hex.EncodeToString(hash[:])
+	return "rec_" + hex.EncodeToString(hash[:])
 }
 
 // 更新Moment信息

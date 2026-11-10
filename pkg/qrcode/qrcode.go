@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/mdp/qrterminal/v3"
 )
@@ -64,18 +65,24 @@ func SaveAndDisplayQRCode(qrData []byte) error {
 }
 
 // OpenInBrowser 在浏览器中打开二维码，返回一个关闭服务器的函数和通知登录成功的函数
-func OpenInBrowser(qrData []byte) (shutdown func(), notifySuccess func(), err error) {
-	// 找一个可用端口
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func OpenInBrowser(qrData []byte, listenAddr string) (shutdown func(), notifySuccess func(), err error) {
+	// 找一个可用端口（可用 -listen 指定）
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:0"
+	}
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("无法监听端口: %w", err)
 	}
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	if tcp, ok := listener.Addr().(*net.TCPAddr); ok && tcp.IP != nil && !tcp.IP.IsLoopback() {
+		url = fmt.Sprintf("http://%s", listener.Addr().String())
+	}
 
 	// 登录状态
-	loginSuccess := false
+	var loginSuccess atomic.Bool
 
 	// 解析模板
 	tmpl, err := template.New("login").Parse(loginTemplate)
@@ -102,7 +109,7 @@ func OpenInBrowser(qrData []byte) (shutdown func(), notifySuccess func(), err er
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if loginSuccess {
+		if loginSuccess.Load() {
 			w.Write([]byte(`{"success": true}`))
 		} else {
 			w.Write([]byte(`{"success": false}`))
@@ -128,7 +135,7 @@ func OpenInBrowser(qrData []byte) (shutdown func(), notifySuccess func(), err er
 		server.Shutdown(context.Background())
 	}
 	notifySuccess = func() {
-		loginSuccess = true
+		loginSuccess.Store(true)
 	}
 
 	return shutdown, notifySuccess, nil
@@ -145,6 +152,15 @@ func openBrowser(url string) error {
 		cmd = exec.Command("xdg-open", url)
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "android":
+		// Termux：优先 termux-open，其次 am start
+		if p, lerr := exec.LookPath("termux-open"); lerr == nil {
+			return exec.Command(p, url).Start()
+		}
+		if p, lerr := exec.LookPath("am"); lerr == nil {
+			return exec.Command(p, "start", "-a", "android.intent.action.VIEW", "-d", url).Start()
+		}
+		return fmt.Errorf("未找到 termux-open / am")
 	default:
 		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
 	}

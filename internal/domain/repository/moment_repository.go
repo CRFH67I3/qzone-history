@@ -17,4 +17,6 @@ type MomentRepository interface {
 	MarkAsDeleted(ctx context.Context, momentID string) error
 	MarkAsReconstructed(ctx context.Context, momentID string) error
 	FindByID(ctx context.Context, momentID string) (*entity.Moment, error)
+	SaveMoment(ctx context.Context, moment entity.Moment) error
+	PurgeByUserQQ(ctx context.Context, userQQ string) error
 }

@@ -21,13 +21,14 @@ type Moment struct {
 	Views           int       `json:"views"`                               // 浏览次数
 	IsDeleted       bool      `json:"isDeleted"`                           // 是否已删除
 	IsReconstructed bool      `json:"isReconstructed"`                     // 是否通过活动记录重建
+	Source          string    `json:"source"`                              // 数据来源: qzone=说说接口, activity=互动消息重建
 }
 
 // BeforeCreate 钩子，在创建记录之前自动生成UUID（仅当ID为空时）
 func (moment *Moment) BeforeCreate(tx *gorm.DB) (err error) {
 	if moment.ID == "" {
-		// 使用内容和收到的人的QQ生成唯一键
-		key := moment.Content + moment.UserQQ
+		// 使用 内容+时间+发送者 生成唯一键（旧版只用 内容+QQ，空内容或重复内容会互相覆盖）
+		key := moment.Content + "|" + moment.Timestamp.String() + "|" + moment.SenderQQ + "|" + moment.UserQQ
 		hash := md5.Sum([]byte(key))
 		moment.ID = hex.EncodeToString(hash[:])
 	}
