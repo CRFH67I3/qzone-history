@@ -38,6 +38,7 @@ type QzoneAPIClient interface {
 type qzoneAPIClient struct {
 	httpClient *http.Client
 	config     *config.Config
+	debugDir   string // 非空时把原始响应写到该目录
 }
 
 func NewQzoneAPIClient(config *config.Config) QzoneAPIClient {

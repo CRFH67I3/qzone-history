@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"qzone-history/internal/domain/entity"
 	"strconv"
 	"strings"
@@ -23,7 +25,14 @@ func (c *qzoneAPIClient) newRequest(target string, cookies map[string]string) (*
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Referer", "https://user.qzone.qq.com/")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	ua := ""
+	if c.config != nil {
+		ua = c.config.QzoneAPI.UserAgent
+	}
+	if ua == "" {
+		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+	}
+	req.Header.Set("User-Agent", ua)
 	for name, value := range cookies {
 		req.AddCookie(&http.Cookie{Name: name, Value: value})
 	}
@@ -41,6 +50,7 @@ func (c *qzoneAPIClient) fetchJSONP(req *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.saveDebug("jsonp", body)
 	text := strings.TrimSpace(decodeBody(body, resp.Header.Get("Content-Type")))
 	if i := strings.Index(text, "("); i >= 0 && strings.HasPrefix(text, "_preloadCallback") {
 		text = text[i+1:]
@@ -56,6 +66,19 @@ func (c *qzoneAPIClient) fetchJSONP(req *http.Request) ([]byte, error) {
 	return []byte(text), nil
 }
 
+// EnableDebug 把原始响应保存到 dir（便于排查接口被风控的情况）
+func (c *qzoneAPIClient) EnableDebug(dir string) { c.debugDir = dir }
+
+// saveDebug 保存一次原始响应
+func (c *qzoneAPIClient) saveDebug(tag string, body []byte) {
+	if c.debugDir == "" {
+		return
+	}
+	_ = os.MkdirAll(c.debugDir, 0o755)
+	name := fmt.Sprintf("%s_%d.log", tag, time.Now().UnixNano())
+	_ = os.WriteFile(filepath.Join(c.debugDir, name), body, 0o644)
+}
+
 // fetchRaw 读取原始响应文本（自动 GBK 转换）
 func (c *qzoneAPIClient) fetchRaw(req *http.Request) (string, error) {
 	resp, err := c.httpClient.Do(req)
@@ -67,6 +90,7 @@ func (c *qzoneAPIClient) fetchRaw(req *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	c.saveDebug("raw", body)
 	return decodeBody(body, resp.Header.Get("Content-Type")), nil
 }
 

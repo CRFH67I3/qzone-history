@@ -185,22 +185,54 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 	o := a.opts
 	cookies := user.Cookies
 
-	// 1) 探测：公开 / 含私密 两个范围的 total
-	publicTotal, err1 := o.Moments.GetMomentCount(cookies)
-	privTotal := 0
+	// 1) 探测各通道的总数，失败的通道会把错误打印出来（不吞）
+	type probe struct {
+		name  string
+		total int
+		err   error
+	}
+	probes := []probe{}
+	pub, e1 := o.Moments.GetMomentCount(cookies)
+	probes = append(probes, probe{"公开 msglist_v6", pub, e1})
+	filterBest, filterBestN, filterBestErr := 0, 0, error(nil)
 	for _, f := range []int{1, 0, 2} {
 		fv := f
-		if n, err := a.momentCountWithFilter(cookies, fv); err == nil && n > privTotal {
-			privTotal = n
+		n, err := a.momentCountWithFilter(cookies, fv)
+		if err != nil {
+			if filterBestErr == nil {
+				filterBestErr = err
+			}
+			continue
+		}
+		if n > filterBestN {
+			filterBest, filterBestN = fv, n
 		}
 	}
-	if err1 != nil && privTotal == 0 {
-		return fmt.Errorf("获取说说总数失败: %w", err1)
+	probes = append(probes, probe{fmt.Sprintf("含私密 filter=%d", filterBest), filterBestN, filterBestErr})
+
+	ic2N, ic2Err := 0, error(nil)
+	if o.Moments.Ic2Available(cookies) {
+		ic2N, ic2Err = o.Moments.GetMomentCountWithFilter(cookies, 1) // 复用接口；失败下面会单独说明
+		_ = ic2N
 	}
-	if privTotal < publicTotal {
-		privTotal = publicTotal
+	_ = ic2Err
+
+	for _, p := range probes {
+		if p.err != nil {
+			log.Printf("[%s] 探测失败: %v", p.name, p.err)
+		} else {
+			log.Printf("[%s] 报告 %d 条", p.name, p.total)
+		}
 	}
-	log.Printf("公开可见 %d 条 / 含仅自己可见最多 %d 条", publicTotal, privTotal)
+	if e1 != nil && filterBestN == 0 {
+		return fmt.Errorf("所有通道都无法获取说说数量，最后错误: %v", e1)
+	}
+
+	maxTotal := pub
+	if filterBestN > maxTotal {
+		maxTotal = filterBestN
+	}
+	log.Printf("合计上限 %d 条（公开 %d / 含私密 %d）", maxTotal, pub, filterBestN)
 
 	seen := map[string]bool{}
 	saved := 0
@@ -225,12 +257,13 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 		return true
 	}
 
-	// 2) 主通道：msglist_v6，公开范围
 	fetch := func(name string, total int, get func(pos, num int) ([]*entity.Moment, error)) {
 		if total <= 0 {
+			log.Printf("[%s] 跳过（总数 0）", name)
 			return
 		}
 		got := 0
+		failures := 0
 		for pos := 0; pos < total; pos += pageSize {
 			select {
 			case <-ctx.Done():
@@ -239,10 +272,18 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 			}
 			list, err := get(pos, pageSize)
 			if err != nil {
+				failures++
 				log.Printf("[%s] 第 %d~%d 条失败: %v", name, pos+1, pos+pageSize, err)
-				break
+				if failures >= 3 {
+					log.Printf("[%s] 连续失败 3 次，放弃该通道", name)
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
+			failures = 0
 			if len(list) == 0 {
+				log.Printf("[%s] 第 %d 条起返回空，结束", name, pos+1)
 				break
 			}
 			for _, m := range list {
@@ -255,26 +296,22 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 		log.Printf("[%s] 拉取完成，新增 %d 条", name, got)
 	}
 
-	fetch("公开通道", publicTotal, func(pos, num int) ([]*entity.Moment, error) {
+	// 2) 公开通道
+	fetch("公开通道", pub, func(pos, num int) ([]*entity.Moment, error) {
 		return o.Moments.GetMoments(cookies, pos, num)
 	})
 
-	// 3) 私密范围：带 filter 参数再扫一遍（哪个 filter 数量大用哪个）
-	for _, f := range []int{1, 0, 2} {
-		fv := f
-		n, err := a.momentCountWithFilter(cookies, fv)
-		if err != nil || n <= publicTotal {
-			continue
-		}
-		log.Printf("[含私密通道] filter=%d 报告 %d 条，开始补拉", fv, n)
-		fetch(fmt.Sprintf("含私密 filter=%d", fv), n, func(pos, num int) ([]*entity.Moment, error) {
+	// 3) 含私密通道
+	if filterBestN > pub {
+		fv := filterBest
+		fetch(fmt.Sprintf("含私密 filter=%d", fv), filterBestN, func(pos, num int) ([]*entity.Moment, error) {
 			return o.Moments.GetMomentsWithFilter(cookies, pos, num, &fv)
 		})
 	}
 
-	// 4) 网页通道：ic2 / qzonetoken，补拉公开通道漏掉的（含仅自己可见）
+	// 4) 网页 ic2 通道（能拿到仅自己可见）
 	if o.Moments.Ic2Available(cookies) {
-		fetch("网页通道", privTotal, func(pos, num int) ([]*entity.Moment, error) {
+		fetch("网页通道", maxTotal, func(pos, num int) ([]*entity.Moment, error) {
 			return o.Moments.GetMomentsIc2(cookies, pos, num)
 		})
 	} else {
@@ -283,7 +320,10 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 
 	log.Printf("本次共写入/更新 %d 条说说（去重后）", saved)
 	if saved == 0 {
-		log.Println("提示：没有拉到任何说说，可用 --cookie 换用浏览器 Cookie 重试")
+		log.Println("======== 排查提示 ========")
+		log.Println("1. 先跑: qzone-history --cookie   (粘贴浏览器 Cookie，成功率最高)")
+		log.Println("2. 若网页能看而这里 0 条，多半是 msglist_v6 被风控，需要 qzonetoken + skey 同时有效")
+		log.Println("3. 可加 --debug 保存原始响应到 raw/ 目录，用于分析接口返回")
 	}
 	return nil
 }

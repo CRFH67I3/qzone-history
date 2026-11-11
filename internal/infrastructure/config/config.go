@@ -19,6 +19,7 @@ type Config struct {
 		QRCodeURL  string
 		LoginURL   string
 		MessageURL string
+		UserAgent  string // 可自定义 UA（接口风控时换 UA 常有效）
 	}
 	Output struct {
 		Dir     string // 导出目录（JSON / CSV / HTML），默认当前目录

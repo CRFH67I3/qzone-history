@@ -35,6 +35,7 @@ func main() {
 	exportOnly := flag.Bool("export-only", false, "不联网，只用本地数据库重新导出")
 	force := flag.Bool("login", false, "强制重新扫码登录（忽略已保存的登录态）")
 	listen := flag.String("listen", "", "指定二维码/Cookie 页面端口，如 127.0.0.1:8080（默认随机端口）")
+	debugRaw := flag.Bool("debug", false, "把接口原始响应保存到 ./raw 目录，便于排查为什么是 0 条")
 	useCookie := flag.Bool("cookie", false, "不走扫码，改用粘贴 Cookie 登录（接口收紧时最稳）")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "qzone-history %s — QQ空间说说备份\n\n用法: qzone-history [参数]\n\n参数:\n", version.Version)
@@ -128,6 +129,11 @@ func main() {
 		ListenAddr:      *listen,
 		WantCookieLogin: *useCookie,
 	})
+
+	if *debugRaw {
+		iAPI.EnableDebug("./raw")
+		log.Println("--debug：原始响应将保存到 ./raw")
+	}
 
 	if err := a.Run(ctx); err != nil {
 		log.Fatalf("运行失败: %v", err)

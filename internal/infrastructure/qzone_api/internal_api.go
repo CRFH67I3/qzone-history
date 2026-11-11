@@ -16,4 +16,5 @@ type InternalAPI interface {
 	GetMomentsIc2(cookies map[string]string, pos, num int) ([]*entity.Moment, error)
 	Ic2Available(cookies map[string]string) bool
 	GetMomentCountWithFilter(cookies map[string]string, filter int) (int, error)
+	EnableDebug(dir string)
 }
