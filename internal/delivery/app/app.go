@@ -124,10 +124,14 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) localUser(ctx context.Context) (*entity.User, error) {
+	// 只导出模式：优先取本地任意一个已登录用户，登录态过期也照样导出（导出不联网）
+	if u, err := a.opts.UserRepo.GetLastLoginUser(ctx); err == nil && u != nil && u.QQ != "" {
+		return u, nil
+	}
 	if u, ok, err := a.opts.Auth.CheckLocalLoginStatus(ctx); err == nil && ok {
 		return u, nil
 	}
-	return nil, errors.New("本地没有可用的登录用户，无法只导出")
+	return nil, errors.New("本地数据库里没有用户记录，无法只导出")
 }
 
 func (a *App) login(ctx context.Context) (*entity.User, error) {
