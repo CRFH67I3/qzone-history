@@ -51,6 +51,7 @@ func LoadConfig() (*Config, error) {
 			QRCodeURL  string
 			LoginURL   string
 			MessageURL string
+			UserAgent  string
 		}{
 			QRCodeURL:  "https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=0.8692955245720428&daid=5",
 			LoginURL:   "https://ssl.ptlogin2.qq.com/ptqrlogin",
