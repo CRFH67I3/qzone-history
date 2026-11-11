@@ -56,6 +56,20 @@ func (c *qzoneAPIClient) fetchJSONP(req *http.Request) ([]byte, error) {
 	return []byte(text), nil
 }
 
+// fetchRaw 读取原始响应文本（自动 GBK 转换）
+func (c *qzoneAPIClient) fetchRaw(req *http.Request) (string, error) {
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := readLimited(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return decodeBody(body, resp.Header.Get("Content-Type")), nil
+}
+
 func headText(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -94,11 +108,47 @@ func (c *qzoneAPIClient) GetMomentCount(cookies map[string]string) (int, error) 
 	return r.Total, nil
 }
 
-// GetMoments 拉取一页说说
-func (c *qzoneAPIClient) GetMoments(cookies map[string]string, pos, num int) ([]*entity.Moment, error) {
+// GetMomentCountWithFilter 用 filter 变体取总数（探测是否包含仅自己可见）
+func (c *qzoneAPIClient) GetMomentCountWithFilter(cookies map[string]string, filter int) (int, error) {
 	uin := ExtractUinFromCookies(cookies)
-	target := fmt.Sprintf("%s?uin=%s&ftype=0&sort=0&pos=%d&num=%d&replynum=100&g_tk=%s&callback=_preloadCallback&code_version=1&format=jsonp&need_private_comment=1",
-		momentListURL, url.QueryEscape(uin), pos, num, GenerateGTKValue(cookies["p_skey"]))
+	target := fmt.Sprintf("%s?uin=%s&ftype=0&sort=0&pos=0&num=1&replynum=0&g_tk=%s&callback=_preloadCallback&code_version=1&format=jsonp&filter=%d",
+		momentListURL, url.QueryEscape(uin), GenerateGTKValue(cookies["p_skey"]), filter)
+	req, err := c.newRequest(target, cookies)
+	if err != nil {
+		return 0, err
+	}
+	data, err := c.fetchJSONP(req)
+	if err != nil {
+		return 0, err
+	}
+	var r momentListResponse
+	if err := json.Unmarshal(data, &r); err != nil {
+		return 0, err
+	}
+	if r.Code != 0 {
+		return 0, fmt.Errorf("说说接口报错(%d): %s", r.Code, r.Message)
+	}
+	return r.Total, nil
+}
+
+// GetMoments 拉取一页说说（默认公开范围）
+func (c *qzoneAPIClient) GetMoments(cookies map[string]string, pos, num int) ([]*entity.Moment, error) {
+	return c.getMoments(cookies, pos, num, nil)
+}
+
+// GetMomentsWithFilter 拉取一页说说，filter 为空表示不带该参数
+func (c *qzoneAPIClient) GetMomentsWithFilter(cookies map[string]string, pos, num int, filter *int) ([]*entity.Moment, error) {
+	return c.getMoments(cookies, pos, num, filter)
+}
+
+func (c *qzoneAPIClient) getMoments(cookies map[string]string, pos, num int, filter *int) ([]*entity.Moment, error) {
+	uin := ExtractUinFromCookies(cookies)
+	extra := ""
+	if filter != nil {
+		extra = fmt.Sprintf("&filter=%d", *filter)
+	}
+	target := fmt.Sprintf("%s?uin=%s&ftype=0&sort=0&pos=%d&num=%d&replynum=100&g_tk=%s&callback=_preloadCallback&code_version=1&format=jsonp&need_private_comment=1%s",
+		momentListURL, url.QueryEscape(uin), pos, num, GenerateGTKValue(cookies["p_skey"]), extra)
 	req, err := c.newRequest(target, cookies)
 	if err != nil {
 		return nil, err

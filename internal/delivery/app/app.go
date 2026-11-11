@@ -183,47 +183,119 @@ func (a *App) login(ctx context.Context) (*entity.User, error) {
 
 func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 	o := a.opts
-	total, err := o.Moments.GetMomentCount(user.Cookies)
-	if err != nil {
-		return fmt.Errorf("获取说说总数失败: %w", err)
+	cookies := user.Cookies
+
+	// 1) 探测：公开 / 含私密 两个范围的 total
+	publicTotal, err1 := o.Moments.GetMomentCount(cookies)
+	privTotal := 0
+	for _, f := range []int{1, 0, 2} {
+		fv := f
+		if n, err := o.momentCountWithFilter(cookies, fv); err == nil && n > privTotal {
+			privTotal = n
+		}
 	}
-	log.Printf("账号 %s 共有 %d 条未删除说说", user.QQ, total)
-	if total <= 0 {
-		log.Println("没有可抓取的说说（注意：仅自己可见/已被删除的说说接口拿不到）")
-		return nil
+	if err1 != nil && privTotal == 0 {
+		return fmt.Errorf("获取说说总数失败: %w", err1)
+	}
+	if privTotal < publicTotal {
+		privTotal = publicTotal
+	}
+	log.Printf("公开可见 %d 条 / 含仅自己可见最多 %d 条", publicTotal, privTotal)
+
+	seen := map[string]bool{}
+	saved := 0
+
+	save := func(m *entity.Moment) bool {
+		if m == nil || m.ID == "" {
+			return false
+		}
+		if seen[m.ID] {
+			return false
+		}
+		m.UserQQ = user.QQ
+		if m.SenderQQ == "" {
+			m.SenderQQ = user.QQ
+		}
+		if err := o.MomentRepo.SaveMoment(ctx, *m); err != nil {
+			log.Printf("保存说说 %s 失败: %v", m.ID, err)
+			return false
+		}
+		seen[m.ID] = true
+		saved++
+		return true
 	}
 
-	got := 0
-	for pos := 0; pos < total; pos += pageSize {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// 2) 主通道：msglist_v6，公开范围
+	fetch := func(name string, total int, get func(pos, num int) ([]*entity.Moment, error)) {
+		if total <= 0 {
+			return
 		}
-		list, err := o.Moments.GetMoments(user.Cookies, pos, pageSize)
-		if err != nil {
-			log.Printf("第 %d~%d 条抓取失败: %v", pos+1, pos+pageSize, err)
-			break
-		}
-		if len(list) == 0 {
-			break
-		}
-		for _, m := range list {
-			m.UserQQ = user.QQ
-			if m.SenderQQ == "" {
-				m.SenderQQ = user.QQ
+		got := 0
+		for pos := 0; pos < total; pos += pageSize {
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
-			if err := o.MomentRepo.SaveMoment(ctx, *m); err != nil {
-				log.Printf("保存说说 %s 失败: %v", m.ID, err)
-				continue
+			list, err := get(pos, pageSize)
+			if err != nil {
+				log.Printf("[%s] 第 %d~%d 条失败: %v", name, pos+1, pos+pageSize, err)
+				break
 			}
-			got++
+			if len(list) == 0 {
+				break
+			}
+			for _, m := range list {
+				if save(m) {
+					got++
+				}
+			}
+			time.Sleep(300 * time.Millisecond)
 		}
-		log.Printf("进度 %d/%d", min(pos+len(list), total), total)
-		time.Sleep(300 * time.Millisecond)
+		log.Printf("[%s] 拉取完成，新增 %d 条", name, got)
 	}
-	log.Printf("本次写入/更新说说 %d 条", got)
+
+	fetch("公开通道", publicTotal, func(pos, num int) ([]*entity.Moment, error) {
+		return o.Moments.GetMoments(cookies, pos, num)
+	})
+
+	// 3) 私密范围：带 filter 参数再扫一遍（哪个 filter 数量大用哪个）
+	for _, f := range []int{1, 0, 2} {
+		fv := f
+		n, err := o.momentCountWithFilter(cookies, fv)
+		if err != nil || n <= publicTotal {
+			continue
+		}
+		log.Printf("[含私密通道] filter=%d 报告 %d 条，开始补拉", fv, n)
+		fetch(fmt.Sprintf("含私密 filter=%d", fv), n, func(pos, num int) ([]*entity.Moment, error) {
+			return o.Moments.GetMomentsWithFilter(cookies, pos, num, &fv)
+		})
+	}
+
+	// 4) 网页通道：ic2 / qzonetoken，补拉公开通道漏掉的（含仅自己可见）
+	if o.Moments.Ic2Available(cookies) {
+		fetch("网页通道", privTotal, func(pos, num int) ([]*entity.Moment, error) {
+			return o.Moments.GetMomentsIc2(cookies, pos, num)
+		})
+	} else {
+		log.Println("[网页通道] 当前 Cookie 缺少 p_skey，跳过（可用 --cookie 重新登录）")
+	}
+
+	log.Printf("本次共写入/更新 %d 条说说（去重后）", saved)
+	if saved == 0 {
+		log.Println("提示：没有拉到任何说说，可用 --cookie 换用浏览器 Cookie 重试")
+	}
 	return nil
+}
+
+// momentCountWithFilter 用 filter 变体探测总数
+func (a *App) momentCountWithFilter(cookies map[string]string, filter int) (int, error) {
+	list, err := a.opts.Moments.GetMomentsWithFilter(cookies, 0, 1, &filter)
+	if err != nil {
+		return 0, err
+	}
+	_ = list
+	return a.opts.Moments.GetMomentCountWithFilter(cookies, filter)
 }
 
 func (a *App) exportAll(ctx context.Context, qq string) error {
