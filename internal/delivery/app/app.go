@@ -190,7 +190,7 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 	privTotal := 0
 	for _, f := range []int{1, 0, 2} {
 		fv := f
-		if n, err := o.momentCountWithFilter(cookies, fv); err == nil && n > privTotal {
+		if n, err := a.momentCountWithFilter(cookies, fv); err == nil && n > privTotal {
 			privTotal = n
 		}
 	}
@@ -262,7 +262,7 @@ func (a *App) fetchMoments(ctx context.Context, user *entity.User) error {
 	// 3) 私密范围：带 filter 参数再扫一遍（哪个 filter 数量大用哪个）
 	for _, f := range []int{1, 0, 2} {
 		fv := f
-		n, err := o.momentCountWithFilter(cookies, fv)
+		n, err := a.momentCountWithFilter(cookies, fv)
 		if err != nil || n <= publicTotal {
 			continue
 		}
