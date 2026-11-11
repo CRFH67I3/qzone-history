@@ -42,6 +42,11 @@ func main() {
 	}
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Printf("%s\n", version.Version)
+		return
+	}
+
 	fmt.Print(banner)
 	log.Printf("qzone-history 版本: %s", version.Version)
 
