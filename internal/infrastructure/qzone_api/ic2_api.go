@@ -33,26 +33,23 @@ func (c *qzoneAPIClient) Ic2Available(cookies map[string]string) bool {
 	return cookies["p_skey"] != "" && ExtractUinFromCookies(cookies) != ""
 }
 
-// GetMomentsIc2 用网页版 ic2 接口拉说说（可含仅自己可见）
+// GetMomentsIc2 用网页通道拉说说（先试 filter=1 带私密，失败再退回 HTML 解析）
 func (c *qzoneAPIClient) GetMomentsIc2(cookies map[string]string, pos, num int) ([]*entity.Moment, error) {
 	uin := ExtractUinFromCookies(cookies)
 	token, err := c.qzoneToken(cookies, uin)
-	if err != nil {
-		return nil, err
-	}
-	qz := url.QueryEscape(token)
-	target := fmt.Sprintf(
-		"https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6?uin=%s&ftype=0&sort=0&pos=%d&num=%d&replynum=50&g_tk=%s&callback=_preloadCallback&code_version=1&format=jsonp&need_private_comment=1&qzonetoken=%s",
-		uin, pos, num, GenerateGTKValue(cookies["p_skey"]), qz)
-	_ = qz
 
-	// 主用 msglist_v6 的 filter 变体（网页上的是同一个接口，filter=1 会带上私密）
-	moments, err := c.GetMomentsWithFilter(cookies, pos, num, 1)
-	if err == nil && len(moments) > 0 {
+	one := 1
+	moments, ferr := c.GetMomentsWithFilter(cookies, pos, num, &one)
+	if ferr == nil && len(moments) > 0 {
 		for _, m := range moments {
-			m.Source = "qzone-web"
+			if m.Source == "" || m.Source == "qzone" {
+				m.Source = "qzone-web"
+			}
 		}
 		return moments, nil
+	}
+	if err != nil && ferr != nil {
+		return nil, fmt.Errorf("网页通道不可用: %v / %v", err, ferr)
 	}
 	return c.getMomentsHTML(cookies, uin, token, pos, num)
 }
